@@ -22,14 +22,13 @@ integration inside HACS.](https://my.home-assistant.io/badges/hacs_repository.sv
 4. Install **Luck Jingle Printer**, then restart Home Assistant.
 5. In **Settings → Devices & services**, choose **Add integration** and search
    for **Luck Jingle Printer**.
-6. Scan the printer's QR label with your phone and paste its contents into the
-   setup form. The C50 label format is
-   `LPC50_3F3D?12:22:33:4C:3D:3F`.
+6. Select **LPC50 (ORICO C50)**. Home Assistant scans for a matching BLE
+   advertisement and selects the printer automatically. If multiple matching
+   printers are nearby, choose the one to configure.
 
-The address encoded on this label is the printer's Bluetooth Classic address,
-not its BLE address. Setup uses the name in the QR code to find the printer's
-BLE advertisement and stores that BLE address instead. You can also enter a
-BLE address directly.
+The QR label is not needed for setup. It contains the printer name and its
+Bluetooth Classic address; Home Assistant discovers and connects to the
+separate BLE address automatically.
 
 For manual installation, copy `custom_components/luck_jingle` into the
 `custom_components` directory in your Home Assistant configuration folder and

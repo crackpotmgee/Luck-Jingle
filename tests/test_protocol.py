@@ -4,21 +4,18 @@ import unittest
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-PROTOCOL_PATH = (
-    Path(__file__).parents[1]
-    / "custom_components"
-    / "luck_jingle"
-    / "protocol.py"
-)
+INTEGRATION_PATH = Path(__file__).parents[1] / "custom_components" / "luck_jingle"
+PROTOCOL_PATH = INTEGRATION_PATH / "protocol.py"
 PROTOCOL_SPEC = spec_from_file_location("luck_jingle_protocol", PROTOCOL_PATH)
 assert PROTOCOL_SPEC is not None and PROTOCOL_SPEC.loader is not None
 PROTOCOL = module_from_spec(PROTOCOL_SPEC)
 PROTOCOL_SPEC.loader.exec_module(PROTOCOL)
-QR_PATH = PROTOCOL_PATH.with_name("qr.py")
-QR_SPEC = spec_from_file_location("luck_jingle_qr", QR_PATH)
-assert QR_SPEC is not None and QR_SPEC.loader is not None
-QR = module_from_spec(QR_SPEC)
-QR_SPEC.loader.exec_module(QR)
+DISCOVERY_SPEC = spec_from_file_location(
+    "luck_jingle_discovery", INTEGRATION_PATH / "discovery.py"
+)
+assert DISCOVERY_SPEC is not None and DISCOVERY_SPEC.loader is not None
+DISCOVERY = module_from_spec(DISCOVERY_SPEC)
+DISCOVERY_SPEC.loader.exec_module(DISCOVERY)
 
 ENABLE = PROTOCOL.ENABLE
 STOP = PROTOCOL.STOP
@@ -65,24 +62,19 @@ class ProtocolTests(unittest.TestCase):
             density_command(3)
 
 
-class PairingQrTests(unittest.TestCase):
-    """Verify the payload printed on Luck Jingle pairing labels."""
+class DiscoveryTests(unittest.TestCase):
+    """Verify model matching for BLE advertisements."""
 
-    def test_parse_printer_qr_payload(self) -> None:
+    def test_match_lpc50_advertisements(self) -> None:
+        self.assertTrue(DISCOVERY.matches_model("LPC50_3F3D_BLE", "lpc50"))
+        self.assertFalse(DISCOVERY.matches_model("LPC51_3F3D_BLE", "lpc50"))
+        self.assertFalse(DISCOVERY.matches_model(None, "lpc50"))
+
+    def test_display_name_drops_ble_suffix(self) -> None:
         self.assertEqual(
-            QR.parse_pairing_qr("LPC50_3F3D?12:22:33:4C:3D:3F"),
-            ("LPC50_3F3D", "12:22:33:4C:3D:3F"),
+            DISCOVERY.printer_display_name("LPC50_3F3D_BLE", "lpc50"),
+            "LPC50_3F3D",
         )
-
-    def test_reject_invalid_qr_payloads(self) -> None:
-        self.assertIsNone(QR.parse_pairing_qr("not-a-printer-qr"))
-        self.assertIsNone(QR.parse_pairing_qr("LPC50?invalid-address"))
-        self.assertIsNone(QR.parse_pairing_qr("bad name?12:22:33:4C:3D:3F"))
-
-    def test_match_qr_name_to_ble_advertisement(self) -> None:
-        self.assertTrue(QR.matches_printer_name("LPC50_3F3D_BLE", "LPC50_3F3D"))
-        self.assertTrue(QR.matches_printer_name("LPC50_3F3D", "LPC50_3F3D"))
-        self.assertFalse(QR.matches_printer_name("LPC50_3F3D2_BLE", "LPC50_3F3D"))
 
 
 if __name__ == "__main__":

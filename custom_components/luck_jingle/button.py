@@ -8,7 +8,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_ADDRESS, CONF_NAME, DOMAIN
+from .const import CONF_ADDRESS, CONF_MODEL, CONF_NAME, DOMAIN
+from .discovery import SUPPORTED_MODELS
 from .printer import LuckJinglePrinter
 
 
@@ -36,7 +37,9 @@ class LuckJingleTestButton(ButtonEntity):
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.data[CONF_NAME],
             manufacturer="Luck Jingle",
-            model="BLE thermal printer",
+            model=SUPPORTED_MODELS.get(
+                entry.data.get(CONF_MODEL), "BLE thermal printer"
+            ),
             connections={("bluetooth", entry.data[CONF_ADDRESS].casefold())},
         )
 

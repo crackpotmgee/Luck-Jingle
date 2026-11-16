@@ -3,15 +3,19 @@
     "step": {
       "user": {
         "title": "Add a Luck Jingle printer",
-        "description": "Scan the label with your phone's camera, then paste the QR contents here. Home Assistant will look up the printer's BLE address while it is powered on and nearby.",
+        "description": "Select your printer model. Keep the printer powered on and nearby while Home Assistant discovers it over Bluetooth LE.",
         "data": {
-          "pairing_code": "QR contents or BLE address",
-          "name": "Printer name"
+          "model": "Printer model"
+        }
+      },
+      "select_device": {
+        "title": "Select printer",
+        "data": {
+          "address": "Nearby printer"
         }
       }
     },
     "error": {
-      "invalid_pairing_code": "Enter the QR contents in name?address format, or a BLE address.",
       "printer_not_found": "The printer was not found over BLE. Turn it on, move it near Home Assistant, and try again."
     },
     "abort": {

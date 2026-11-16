@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a Luck Jingle printer",
+        "description": "Select your printer model. Keep the printer powered on and nearby while Home Assistant discovers it over Bluetooth LE.",
+        "data": {
+          "model": "Printer model"
+        }
+      },
+      "select_device": {
+        "title": "Select printer",
+        "data": {
+          "address": "Nearby printer"
+        }
+      }
+    },
+    "error": {
+      "printer_not_found": "The printer was not found over BLE. Turn it on, move it near Home Assistant, and try again."
+    },
+    "abort": {
+      "already_configured": "This printer is already configured."
+    }
+  },
+  "entity": {
+    "button": {
+      "test_print": {
+        "name": "Print test label"
+      }
+    }
+  }
+}
