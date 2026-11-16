@@ -67,10 +67,16 @@ When only one printer is configured, it is selected automatically.
 
 Some dual-mode LuckPrinter devices advertise both Bluetooth Classic and BLE.
 On Linux, BlueZ may try the Classic printer profile first and fail before a BLE
-connection is established. Remove any stale paired printer entry and retry. A
-dedicated BLE adapter or Bluetooth proxy can also avoid conflicts; changing
-BlueZ's adapter mode affects other Bluetooth devices and should only be done
-with care.
+connection is established. Home Assistant may discover the printer but then
+fail to connect with `br-connection-profile-unavailable` or a BLE connection
+timeout.
+
+The safest workaround is a dedicated BLE adapter or Home Assistant Bluetooth
+proxy. Another option is setting `ControllerMode = le` under `[General]` in
+`/etc/bluetooth/main.conf` on the Linux host, then restarting Bluetooth. This
+disables Bluetooth Classic for every device on that adapter, including
+headphones and other Classic peripherals; do not use it unless that tradeoff is
+acceptable. Removing a stale paired printer entry and retrying may also help.
 
 ## Protocol references
 

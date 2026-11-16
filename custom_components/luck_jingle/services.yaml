@@ -18,11 +18,11 @@ print_text:
         select:
           options:
             - label: Light
-              value: 0
+              value: "0"
             - label: Normal
-              value: 1
+              value: "1"
             - label: Dark
-              value: 2
+              value: "2"
     feed:
       name: Paper feed
       description: Paper feed after printing, in printer dots.

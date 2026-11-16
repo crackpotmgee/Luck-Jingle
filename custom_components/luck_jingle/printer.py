@@ -6,6 +6,7 @@ import asyncio
 
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.exc import BleakError
 from bleak_retry_connector import establish_connection
 
 from homeassistant.components import bluetooth
@@ -64,11 +65,20 @@ class LuckJinglePrinter:
                     f"{self.name} is not currently visible to Home Assistant Bluetooth"
                 )
 
-            client = await establish_connection(
-                BleakClient,
-                ble_device,
-                self.name,
-            )
+            try:
+                client = await establish_connection(
+                    BleakClient,
+                    ble_device,
+                    self.name,
+                )
+            except BleakError as err:
+                raise HomeAssistantError(
+                    f"Could not connect to {self.name} over Bluetooth LE: {err}. "
+                    "On Linux, BlueZ may fail to connect to dual-mode printers "
+                    "over GATT. A dedicated BLE adapter or Bluetooth proxy may "
+                    "help; setting BlueZ ControllerMode=le is another option "
+                    "but disables Bluetooth Classic on that adapter."
+                ) from err
             self._ack_queue = asyncio.Queue()
             try:
                 await client.start_notify(ACK_UUID, self._handle_ack)
