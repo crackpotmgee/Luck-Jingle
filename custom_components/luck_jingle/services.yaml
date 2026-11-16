@@ -1,0 +1,39 @@
+print_text:
+  name: Print text
+  description: Print text on a configured Luck Jingle printer.
+  fields:
+    text:
+      name: Text
+      description: Text to print. Long lines are wrapped automatically.
+      required: true
+      example: Pick up milk
+      selector:
+        text:
+          multiline: true
+    density:
+      name: Print density
+      description: 0 is light, 1 is normal, and 2 is dark.
+      default: 1
+      selector:
+        select:
+          options:
+            - label: Light
+              value: 0
+            - label: Normal
+              value: 1
+            - label: Dark
+              value: 2
+    feed:
+      name: Paper feed
+      description: Paper feed after printing, in printer dots.
+      default: 80
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: slider
+    config_entry_id:
+      name: Config entry ID
+      description: Required only when multiple Luck Jingle printers are configured.
+      selector:
+        text:
