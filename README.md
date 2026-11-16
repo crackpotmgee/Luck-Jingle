@@ -13,6 +13,9 @@ GitHub (or another supported GitHub host).
 
 ## Install with HACS
 
+[![Open your Home Assistant instance and show the Luck Jingle Printer
+integration inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=crackpotmgee&repository=luck-jingle&category=integration)
+
 1. In HACS, open **Integrations** and choose the menu in the upper-right.
 2. Select **Custom repositories**.
 3. Add this repository's GitHub URL and choose **Integration**.
