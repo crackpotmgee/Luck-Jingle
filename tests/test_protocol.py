@@ -22,6 +22,9 @@ DISCOVERY = module_from_spec(DISCOVERY_SPEC)
 DISCOVERY_SPEC.loader.exec_module(DISCOVERY)
 
 ENABLE = PROTOCOL.ENABLE
+DEFAULT_FONT_SIZE = PROTOCOL.DEFAULT_FONT_SIZE
+MAX_FONT_SIZE = PROTOCOL.MAX_FONT_SIZE
+MIN_FONT_SIZE = PROTOCOL.MIN_FONT_SIZE
 MAX_DOCUMENT_BYTES = PROTOCOL.MAX_DOCUMENT_BYTES
 STOP = PROTOCOL.STOP
 WAKE = PROTOCOL.WAKE
@@ -94,6 +97,28 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(any(bitmap))
         self.assertEqual(len(bitmap), 28 * 48)
         self.assertEqual(bitmap[:48], bytes(48))
+
+    def test_increased_font_size_scales_text_and_wraps_long_words(self) -> None:
+        normal = render_text("Test")
+        larger = render_text("Test", font_size=20)
+        wrapped = render_text("W" * 60, font_size=MAX_FONT_SIZE)
+
+        self.assertGreater(len(larger), len(normal))
+        self.assertGreater(len(wrapped), len(render_text("W", font_size=MAX_FONT_SIZE)))
+
+    def test_actual_and_escaped_newlines_render_as_separate_lines(self) -> None:
+        single_line = render_text("First", font_size=20)
+        actual_newlines = render_text("First\r\nSecond", font_size=20)
+        escaped_newlines = render_text(r"First\nSecond", font_size=20)
+
+        self.assertGreater(len(actual_newlines), len(single_line))
+        self.assertEqual(escaped_newlines, actual_newlines)
+
+    def test_font_size_is_bounded(self) -> None:
+        with self.assertRaises(ValueError):
+            render_text("Test", font_size=MIN_FONT_SIZE - 1)
+        with self.assertRaises(ValueError):
+            render_text("Test", font_size=MAX_FONT_SIZE + 1)
 
     def test_text_that_exceeds_raster_limit_is_rejected(self) -> None:
         with self.assertRaises(ValueError):

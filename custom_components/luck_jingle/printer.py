@@ -17,6 +17,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .discovery import scanner_devices_in_connection_order
 from .protocol import (
+    DEFAULT_FONT_SIZE,
     ENABLE,
     RASTER_CHUNK_SIZE,
     STOP,
@@ -61,11 +62,16 @@ class LuckJinglePrinter:
         self._ack_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
     async def async_print_text(
-        self, text: str, *, density: int = 1, feed: int = 80
+        self,
+        text: str,
+        *,
+        density: int = 1,
+        feed: int = 80,
+        font_size: int = DEFAULT_FONT_SIZE,
     ) -> None:
         """Render and print a text label."""
         try:
-            bitmap = render_text(text)
+            bitmap = render_text(text, font_size=font_size)
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
         await self.async_print_rasters([bitmap], density=density, feed=feed)

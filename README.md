@@ -59,14 +59,18 @@ Call the `luck_jingle.print_text` action:
 action: luck_jingle.print_text
 data:
   text: "Shopping list\nMilk\nBread"
+  font_size: 20
   density: 1
   feed: 80
 ```
 
-The text is wrapped to fit the 384-pixel print width. `density` accepts `0`
-(light), `1` (normal), or `2` (dark). `feed` is 0–255 dots. If multiple
-printers are configured, set `config_entry_id` to the desired config entry ID.
-When only one printer is configured, it is selected automatically.
+`font_size` is 10–30 pixels and defaults to 10; larger text wraps more and
+makes taller labels. Newline characters and literal `\n` sequences start new
+lines; long lines wrap to fit the 384-pixel print width.
+`density` accepts `0` (light), `1` (normal), or `2` (dark). `feed` is 0–255
+dots. If multiple printers are configured, set `config_entry_id` to the desired
+config entry ID. When only one printer is configured, it is selected
+automatically.
 
 ## Print from other network devices
 
@@ -76,6 +80,10 @@ The relay is off by default. For an existing printer, enable it from the
 integration's **Configure** options without removing and re-adding the device.
 When enabled, a diagnostic **Network print relay** binary sensor is added to
 the printer device.
+
+This does not advertise an IPP, AirPrint, or DNS-SD printer, so the printer
+will not appear in devices' network-printer scans. It exposes an authenticated
+HTTP API for clients that can send requests to Home Assistant.
 
 The endpoint accepts UTF-8 text jobs as JSON and raw PDF or raster-image files.
 It uses Home Assistant's normal bearer-token authentication:
@@ -116,13 +124,30 @@ relay is enabled, find the `config_entry_id` in the attributes of its
 **Network print relay** entity; that value is used in the endpoint URL and CUPS
 device URI.
 
-### Optional CUPS text-only forwarding
+### Optional: expose a printer queue with CUPS
 
-CUPS is not installed inside Home Assistant. For a CUPS server on another
-Linux device, install `cups/backend/luckjingle` into CUPS's backend directory,
-make it executable, and configure a text-only queue whose device URI is
-`luckjingle://CONFIG_ENTRY_ID`. Create `/etc/cups/luckjingle.conf` readable only
-by the CUPS service account:
+CUPS can share a virtual IPP printer queue and, with mDNS/AirPrint configured,
+advertise that queue to network devices. The ORICO C50 remains a BLE printer;
+the queue forwards its jobs through this integration's authenticated HTTP API.
+
+Home Assistant does not include a CUPS server. The simplest setup is a separate
+Linux host on the same network as Home Assistant. On Debian or Ubuntu, install
+CUPS and Avahi:
+
+```sh
+sudo apt update
+sudo apt install cups avahi-daemon
+```
+
+Install the backend from this repository into CUPS's backend directory:
+
+```sh
+sudo install -o root -g root -m 0755 cups/backend/luckjingle \
+  /usr/lib/cups/backend/luckjingle
+```
+
+Create `/etc/cups/luckjingle.conf` with the Home Assistant base URL and a
+long-lived access token:
 
 ```ini
 [homeassistant]
@@ -130,11 +155,56 @@ url = http://HOME_ASSISTANT:8123
 token = YOUR_HOME_ASSISTANT_ACCESS_TOKEN
 ```
 
-The backend forwards UTF-8 text, PDF, and supported raster-image jobs to the
-authenticated endpoint. It supports copies and form-feed-separated text pages.
-Configure a raw/no-conversion queue so CUPS passes PDF and image bytes through
-unchanged; filtered printer-language jobs are not supported. Restart CUPS
-after installing the backend and creating its configuration file.
+Restrict the token file to root, then create and share a raw queue. Replace
+`CONFIG_ENTRY_ID` with the ID shown in the **Network print relay** entity:
+
+```sh
+sudo chown root:root /etc/cups/luckjingle.conf
+sudo chmod 600 /etc/cups/luckjingle.conf
+sudo lpadmin -p LuckJingle -E \
+  -v "luckjingle://CONFIG_ENTRY_ID" \
+  -m raw
+sudo lpadmin -p LuckJingle -o printer-is-shared=true
+sudo cupsctl --share-printers --remote-any
+sudo systemctl enable --now avahi-daemon
+sudo systemctl restart cups
+```
+
+The backend forwards UTF-8 text, PDF, and supported raster-image jobs. It
+supports copies and form-feed-separated text pages. The raw/no-conversion queue
+is required so CUPS passes PDF and image bytes through unchanged; filtered
+printer-language jobs are not supported.
+
+To check the queue, run `lpstat -p LuckJingle`, then send a text test:
+
+```sh
+printf 'Luck Jingle CUPS test\n' | lp -d LuckJingle -o raw
+```
+
+Other devices can use the queue at
+`ipp://CUPS_HOST:631/printers/LuckJingle`. For Bonjour/AirPrint discovery,
+Avahi/mDNS must be reachable on the local network. Allow CUPS TCP port 631 only
+from trusted LAN devices and do not expose it to the Internet. Keep the
+Home Assistant token private; anyone who obtains it can use the Home Assistant
+API.
+
+#### Home Assistant OS add-on
+
+To try the third-party CUPS add-on, add
+`https://github.com/MaxWinterstein/homeassistant-addons` under **Settings →
+Add-ons → Add-on Store → ⋮ → Repositories**, then install **CUPS Print Server**.
+This add-on is not included or supported by this integration. It must also
+contain the `luckjingle` CUPS backend and its configuration; installing the
+generic add-on alone will not create a working Luck Jingle queue. The
+[CUPS Print Server add-on](https://github.com/MaxWinterstein/homeassistant-addons/tree/main/cups)
+is marked experimental, and its README lists `print`/`print` as default
+credentials. Secure it before exposing it on your network. Using it for Luck
+Jingle requires a custom add-on image that includes the backend and queue
+configuration; otherwise, use the separate Linux-host setup above.
+
+The integration itself does not install CUPS or advertise the queue. Wherever
+CUPS runs, its queue sharing and LAN/mDNS configuration are managed by that
+CUPS server.
 
 ## Linux BlueZ connection issues
 

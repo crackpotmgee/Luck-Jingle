@@ -26,10 +26,17 @@ from .const import (
     SERVICE_PRINT_TEXT,
 )
 from .printer import LuckJinglePrinter
-from .protocol import MAX_DOCUMENT_BYTES, render_document
+from .protocol import (
+    DEFAULT_FONT_SIZE,
+    MAX_DOCUMENT_BYTES,
+    MAX_FONT_SIZE,
+    MIN_FONT_SIZE,
+    render_document,
+)
 
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 ATTR_DENSITY = "density"
+ATTR_FONT_SIZE = "font_size"
 ATTR_FEED = "feed"
 ATTR_TEXT = "text"
 MAX_TEXT_LENGTH = 2000
@@ -39,6 +46,10 @@ PRINT_TEXT_SCHEMA = vol.Schema(
         vol.Required(ATTR_TEXT): vol.All(str, vol.Length(min=1, max=MAX_TEXT_LENGTH)),
         vol.Optional(ATTR_DENSITY, default=1): vol.All(
             vol.Coerce(int), vol.Range(min=0, max=2)
+        ),
+        vol.Optional(ATTR_FONT_SIZE, default=DEFAULT_FONT_SIZE): vol.All(
+            vol.Coerce(int),
+            vol.Range(min=MIN_FONT_SIZE, max=MAX_FONT_SIZE),
         ),
         vol.Optional(ATTR_FEED, default=80): vol.All(
             vol.Coerce(int), vol.Range(min=0, max=255)
@@ -175,6 +186,7 @@ async def _async_print_text(hass: HomeAssistant, data: dict[str, Any]) -> None:
         data[ATTR_TEXT],
         density=data[ATTR_DENSITY],
         feed=data[ATTR_FEED],
+        font_size=data[ATTR_FONT_SIZE],
     )
 
 

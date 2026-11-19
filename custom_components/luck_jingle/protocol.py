@@ -21,6 +21,9 @@ DENSITY_COMMAND = b"\x10\xff\x10\x00"
 PADDING = 8
 WRAP_COLUMNS = 60
 LINE_HEIGHT = 12
+DEFAULT_FONT_SIZE = 10
+MIN_FONT_SIZE = 10
+MAX_FONT_SIZE = 30
 MAX_RASTER_ROWS = 1024
 MAX_DOCUMENT_PAGES = 20
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
@@ -60,32 +63,53 @@ def raster_header(rows: int) -> bytes:
     )
 
 
-def render_text(text: str) -> bytes:
+def render_text(text: str, font_size: int = DEFAULT_FONT_SIZE) -> bytes:
     """Render text to one-bit rows with black pixels encoded as set bits."""
-    font = ImageFont.load_default()
-    lines: list[str] = []
-    for line in text.splitlines() or [""]:
-        lines.extend(
-            textwrap.wrap(
-                line,
-                width=WRAP_COLUMNS,
-                break_long_words=True,
-                break_on_hyphens=True,
-            )
-            or [""]
+    if not MIN_FONT_SIZE <= font_size <= MAX_FONT_SIZE:
+        raise ValueError(
+            f"Font size must be between {MIN_FONT_SIZE} and {MAX_FONT_SIZE}"
         )
 
-    height = PADDING * 2 + len(lines) * LINE_HEIGHT
-    if height > MAX_RASTER_ROWS:
-        raise ValueError(
-            f"Label is too long; the rendered height must not exceed {MAX_RASTER_ROWS} dots"
-        )
-    image = Image.new("1", (WIDTH, height), 1)
-    draw = ImageDraw.Draw(image)
+    text = (
+        text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\n")
+    )
+    font = ImageFont.load_default(size=font_size)
+    padding = round(PADDING * font_size / DEFAULT_FONT_SIZE)
+    line_height = round(LINE_HEIGHT * font_size / DEFAULT_FONT_SIZE)
+    max_line_width = WIDTH - padding * 2
+    lines: list[str] = []
     try:
+        for line in text.splitlines() or [""]:
+            if font_size == DEFAULT_FONT_SIZE:
+                wrapped_lines = textwrap.wrap(
+                    line,
+                    width=WRAP_COLUMNS,
+                    break_long_words=True,
+                    break_on_hyphens=True,
+                )
+            else:
+                wrapped_lines = _wrap_line_to_width(
+                    line,
+                    font,
+                    max_line_width,
+                )
+            lines.extend(wrapped_lines or [""])
+
+        height = padding * 2 + len(lines) * line_height
+        if height > MAX_RASTER_ROWS:
+            raise ValueError(
+                f"Label is too long; the rendered height must not exceed {MAX_RASTER_ROWS} dots"
+            )
+
+        image = Image.new("1", (WIDTH, height), 1)
+        draw = ImageDraw.Draw(image)
         for index, line in enumerate(lines):
             draw.text(
-                (PADDING, PADDING + index * LINE_HEIGHT),
+                (padding, padding + index * line_height),
                 line,
                 font=font,
                 fill=0,
@@ -94,6 +118,42 @@ def render_text(text: str) -> bytes:
         raise ValueError("The printer's built-in font only supports basic text") from err
 
     return _encode_bitmap(image)
+
+
+def _wrap_line_to_width(
+    line: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    max_width: int,
+) -> list[str]:
+    """Wrap words to fit the raster width at the selected font size."""
+    words = line.split()
+    if not words:
+        return [""]
+
+    wrapped: list[str] = []
+    current = ""
+    for word in words:
+        pieces: list[str] = []
+        piece = ""
+        for character in word:
+            if piece and font.getlength(piece + character) > max_width:
+                pieces.append(piece)
+                piece = character
+            else:
+                piece += character
+        if piece:
+            pieces.append(piece)
+
+        for part in pieces:
+            candidate = f"{current} {part}" if current else part
+            if current and font.getlength(candidate) > max_width:
+                wrapped.append(current)
+                current = part
+            else:
+                current = candidate
+    if current:
+        wrapped.append(current)
+    return wrapped
 
 
 def render_image(data: bytes) -> list[bytes]:

@@ -4,12 +4,22 @@ print_text:
   fields:
     text:
       name: Text
-      description: Text to print. Long lines are wrapped automatically.
+      description: Newline characters and \n sequences start new lines. Long lines are wrapped automatically.
       required: true
       example: Pick up milk
       selector:
         text:
           multiline: true
+    font_size:
+      name: Text size
+      description: Font size in pixels. Larger text wraps to more lines.
+      default: 10
+      selector:
+        number:
+          min: 10
+          max: 30
+          step: 2
+          mode: slider
     density:
       name: Print density
       description: 0 is light, 1 is normal, and 2 is dark.
