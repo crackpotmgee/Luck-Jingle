@@ -3,9 +3,10 @@
     "step": {
       "user": {
         "title": "Add a Luck Jingle printer",
-        "description": "Select your printer model. Keep the printer powered on and nearby while Home Assistant discovers it over Bluetooth LE.",
+        "description": "Select your printer model. Keep the printer powered on and nearby while Home Assistant discovers it over Bluetooth LE. Network printing is optional and requires a Home Assistant access token on clients.",
         "data": {
-          "model": "Printer model"
+          "model": "Printer model",
+          "enable_network_print": "Enable authenticated network printing"
         }
       },
       "select_device": {
@@ -22,10 +23,26 @@
       "already_configured": "This printer is already configured."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Network print relay",
+        "description": "Toggle the authenticated HTTP print endpoint for this printer.",
+        "data": {
+          "enable_network_print": "Enable authenticated network printing"
+        }
+      }
+    }
+  },
   "entity": {
     "button": {
       "test_print": {
         "name": "Print test label"
+      }
+    },
+    "binary_sensor": {
+      "network_print": {
+        "name": "Network print relay"
       }
     }
   }

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 from bleak_retry_connector import establish_connection
 
@@ -31,16 +33,25 @@ ACK_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
 ACK_TIMEOUT = 10
 RASTER_ACK_TIMEOUT = 60
 WRITE_DELAY = 0.035
+_LOGGER = logging.getLogger(__name__)
 
 
 class LuckJinglePrinter:
     """Send text print jobs over the printer's BLE GATT connection."""
 
-    def __init__(self, hass: HomeAssistant, address: str, name: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        address: str,
+        name: str,
+        *,
+        network_print_enabled: bool = False,
+    ) -> None:
         """Initialize a printer."""
         self.hass = hass
         self.address = address
         self.name = name
+        self.network_print_enabled = network_print_enabled
         self._job_lock = asyncio.Lock()
         self._ack_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -52,9 +63,18 @@ class LuckJinglePrinter:
             bitmap = render_text(text)
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
-        rows = len(bitmap) // WIDTH_BYTES
-        if not rows or rows > 0xFFFF:
-            raise HomeAssistantError("The rendered label has an unsupported height")
+        await self.async_print_rasters([bitmap], density=density, feed=feed)
+
+    async def async_print_rasters(
+        self, bitmaps: list[bytes], *, density: int = 1, feed: int = 80
+    ) -> None:
+        """Send one or more already-rendered pages to the printer."""
+        if not bitmaps:
+            raise HomeAssistantError("The print job contains no raster pages")
+        for bitmap in bitmaps:
+            rows = len(bitmap) // WIDTH_BYTES
+            if len(bitmap) % WIDTH_BYTES or not rows or rows > 0xFFFF:
+                raise HomeAssistantError("The rendered label has an unsupported height")
 
         async with self._job_lock:
             ble_device = bluetooth.async_ble_device_from_address(
@@ -65,38 +85,98 @@ class LuckJinglePrinter:
                     f"{self.name} is not currently visible to Home Assistant Bluetooth"
                 )
 
+            client = await self._async_connect(ble_device)
+            self._ack_queue = asyncio.Queue()
             try:
-                client = await establish_connection(
+                await client.start_notify(ACK_UUID, self._handle_ack)
+                for bitmap in bitmaps:
+                    rows = len(bitmap) // WIDTH_BYTES
+                    self._ack_queue = asyncio.Queue()
+                    await self._write(client, WAKE)
+                    await self._write(client, ENABLE)
+                    await self._write(client, density_command(density))
+                    await self._wait_for_ack(ACK_TIMEOUT)
+
+                    await self._write(
+                        client,
+                        raster_header(rows) + bitmap,
+                        chunk_size=RASTER_CHUNK_SIZE,
+                    )
+                    await self._wait_for_ack(RASTER_ACK_TIMEOUT)
+                    await self._write(client, feed_command(feed))
+                    await self._write(client, STOP)
+            finally:
+                await client.disconnect()
+
+    async def _async_connect(self, ble_device: BLEDevice) -> BleakClient:
+        """Connect, clearing a stale BlueZ link once if the first attempt fails."""
+        try:
+            return await establish_connection(
+                BleakClient,
+                ble_device,
+                self.name,
+            )
+        except BleakError as first_error:
+            _LOGGER.warning(
+                "Initial BLE connection to %s failed; clearing its BlueZ link "
+                "and retrying: %s",
+                self.name,
+                first_error,
+            )
+            try:
+                await self._async_disconnect_stale_link()
+            except HomeAssistantError as err:
+                raise HomeAssistantError(
+                    f"Could not connect to {self.name} over Bluetooth LE: "
+                    f"{first_error}. Clearing the stale connection also failed: {err}"
+                ) from err
+
+            try:
+                return await establish_connection(
                     BleakClient,
                     ble_device,
                     self.name,
                 )
-            except BleakError as err:
+            except BleakError as retry_error:
                 raise HomeAssistantError(
-                    f"Could not connect to {self.name} over Bluetooth LE: {err}. "
-                    "On Linux, BlueZ may fail to connect to dual-mode printers "
-                    "over GATT. A dedicated BLE adapter or Bluetooth proxy may "
-                    "help; setting BlueZ ControllerMode=le is another option "
-                    "but disables Bluetooth Classic on that adapter."
-                ) from err
-            self._ack_queue = asyncio.Queue()
-            try:
-                await client.start_notify(ACK_UUID, self._handle_ack)
-                await self._write(client, WAKE)
-                await self._write(client, ENABLE)
-                await self._write(client, density_command(density))
-                await self._wait_for_ack(ACK_TIMEOUT)
+                    f"Could not connect to {self.name} over Bluetooth LE after "
+                    f"clearing a stale connection: {retry_error}"
+                ) from retry_error
 
-                await self._write(
-                    client,
-                    raster_header(rows) + bitmap,
-                    chunk_size=RASTER_CHUNK_SIZE,
-                )
-                await self._wait_for_ack(RASTER_ACK_TIMEOUT)
-                await self._write(client, feed_command(feed))
-                await self._write(client, STOP)
-            finally:
-                await client.disconnect()
+    async def _async_disconnect_stale_link(self) -> None:
+        """Ask BlueZ to disconnect this printer before retrying GATT."""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "bluetoothctl",
+                "disconnect",
+                self.address,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as err:
+            raise HomeAssistantError(
+                f"Could not start bluetoothctl to reset {self.name}: {err}"
+            ) from err
+
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+        except TimeoutError as err:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.communicate()
+            raise HomeAssistantError(
+                f"Timed out resetting the Bluetooth connection to {self.name}"
+            ) from err
+
+        if process.returncode:
+            _LOGGER.warning(
+                "bluetoothctl could not disconnect stale link to %s (exit %s): %s",
+                self.name,
+                process.returncode,
+                output.decode(errors="replace").strip(),
+            )
 
     async def _write(
         self,

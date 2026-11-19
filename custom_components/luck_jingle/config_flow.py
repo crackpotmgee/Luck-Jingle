@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
+from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
 )
 
-from .const import CONF_ADDRESS, CONF_MODEL, CONF_NAME, DOMAIN
+from .const import (
+    CONF_ADDRESS,
+    CONF_ENABLE_NETWORK_PRINT,
+    CONF_MODEL,
+    CONF_NAME,
+    DOMAIN,
+)
 from .discovery import (
     MODEL_LPC50,
     SUPPORTED_MODELS,
@@ -32,13 +42,22 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        """Create the options flow for an existing printer entry."""
+        return LuckJingleOptionsFlow()
+
     async def async_step_user(
-        self, user_input: dict[str, str] | None = None
+        self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Ask for the printer model and discover it over BLE."""
         errors: dict[str, str] = {}
         if user_input is not None:
             model = user_input[CONF_MODEL]
+            enable_network_print = user_input[CONF_ENABLE_NETWORK_PRINT]
             devices = self._discovered_devices(model)
             if not devices:
                 try:
@@ -58,11 +77,15 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             if len(devices) == 1:
                 return await self._async_create_printer_entry(
-                    model, devices[0].address, devices[0].name
+                    model,
+                    devices[0].address,
+                    devices[0].name,
+                    enable_network_print,
                 )
 
             if len(devices) > 1:
                 self._model = model
+                self._enable_network_print = enable_network_print
                 self._devices = {
                     info.address: printer_display_name(info.name, model)
                     for info in devices
@@ -81,14 +104,17 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             ],
                             mode=SelectSelectorMode.DROPDOWN,
                         )
-                    )
+                    ),
+                    vol.Required(
+                        CONF_ENABLE_NETWORK_PRINT, default=False
+                    ): BooleanSelector(),
                 }
             ),
             errors=errors,
         )
 
     async def async_step_select_device(
-        self, user_input: dict[str, str] | None = None
+        self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Select a device when multiple printers of the model are visible."""
         errors: dict[str, str] = {}
@@ -96,7 +122,10 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             address = user_input[CONF_ADDRESS]
             if address in self._devices:
                 return await self._async_create_printer_entry(
-                    self._model, address, self._devices[address]
+                    self._model,
+                    address,
+                    self._devices[address],
+                    self._enable_network_print,
                 )
             errors["base"] = "printer_not_found"
 
@@ -128,7 +157,11 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         ]
 
     async def _async_create_printer_entry(
-        self, model: str, address: str, advertisement_name: str | None
+        self,
+        model: str,
+        address: str,
+        advertisement_name: str | None,
+        enable_network_print: bool,
     ) -> config_entries.FlowResult:
         """Create an entry for a discovered printer."""
         name = printer_display_name(advertisement_name, model)
@@ -136,6 +169,38 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
         return self.async_create_entry(
             title=name,
-            data={CONF_ADDRESS: address, CONF_MODEL: model, CONF_NAME: name},
+            data={
+                CONF_ADDRESS: address,
+                CONF_ENABLE_NETWORK_PRINT: enable_network_print,
+                CONF_MODEL: model,
+                CONF_NAME: name,
+            },
+        )
+
+
+class LuckJingleOptionsFlow(config_entries.OptionsFlow):
+    """Configure network printing for an existing printer entry."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Toggle the authenticated network print relay."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        enabled = self.config_entry.options.get(
+            CONF_ENABLE_NETWORK_PRINT,
+            self.config_entry.data.get(CONF_ENABLE_NETWORK_PRINT, False),
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ENABLE_NETWORK_PRINT,
+                        default=enabled,
+                    ): BooleanSelector(),
+                }
+            ),
         )
 

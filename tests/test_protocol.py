@@ -2,7 +2,10 @@
 
 import unittest
 from importlib.util import module_from_spec, spec_from_file_location
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image
 
 INTEGRATION_PATH = Path(__file__).parents[1] / "custom_components" / "luck_jingle"
 PROTOCOL_PATH = INTEGRATION_PATH / "protocol.py"
@@ -18,12 +21,54 @@ DISCOVERY = module_from_spec(DISCOVERY_SPEC)
 DISCOVERY_SPEC.loader.exec_module(DISCOVERY)
 
 ENABLE = PROTOCOL.ENABLE
+MAX_DOCUMENT_BYTES = PROTOCOL.MAX_DOCUMENT_BYTES
 STOP = PROTOCOL.STOP
 WAKE = PROTOCOL.WAKE
 density_command = PROTOCOL.density_command
 feed_command = PROTOCOL.feed_command
 raster_header = PROTOCOL.raster_header
+render_document = PROTOCOL.render_document
+render_image = PROTOCOL.render_image
 render_text = PROTOCOL.render_text
+
+
+def _pdf_with_pages(page_count: int) -> bytes:
+    """Build a minimal PDF fixture without external tooling."""
+    page_references = " ".join(
+        f"{3 + page_index * 2} 0 R" for page_index in range(page_count)
+    )
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        (
+            f"<< /Type /Pages /Kids [{page_references}] /Count {page_count} >>"
+        ).encode(),
+    ]
+    for page_index in range(page_count):
+        page_object = 3 + page_index * 2
+        content_object = page_object + 1
+        objects.extend(
+            [
+                (
+                    f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] "
+                    f"/Resources << >> /Contents {content_object} 0 R >>"
+                ).encode(),
+                b"<< /Length 0 >>\nstream\n\nendstream",
+            ]
+        )
+    document = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, body in enumerate(objects, 1):
+        offsets.append(len(document))
+        document.extend(f"{index} 0 obj\n".encode() + body + b"\nendobj\n")
+    xref_offset = len(document)
+    document.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
+    for offset in offsets[1:]:
+        document.extend(f"{offset:010} 00000 n \n".encode())
+    document.extend(
+        f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n".encode()
+    )
+    return bytes(document)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -52,6 +97,41 @@ class ProtocolTests(unittest.TestCase):
     def test_text_that_exceeds_raster_limit_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             render_text("\n" * 85)
+
+    def test_image_is_resized_to_printer_width(self) -> None:
+        image = Image.new("RGB", (2, 1), "black")
+        image_data = BytesIO()
+        image.save(image_data, format="PNG")
+
+        bitmaps = render_image(image_data.getvalue())
+
+        self.assertEqual(len(bitmaps), 1)
+        self.assertEqual(len(bitmaps[0]), 192 * 48)
+        self.assertTrue(any(bitmaps[0]))
+
+    def test_transparent_image_background_prints_white(self) -> None:
+        image = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+        image_data = BytesIO()
+        image.save(image_data, format="PNG")
+
+        self.assertFalse(any(render_image(image_data.getvalue())[0]))
+
+    def test_pdf_pages_render_to_separate_printer_width_bitmaps(self) -> None:
+        bitmaps = render_document(_pdf_with_pages(2), "application/pdf")
+
+        self.assertEqual(len(bitmaps), 2)
+        self.assertTrue(all(len(bitmap) == 384 * 48 for bitmap in bitmaps))
+
+    def test_invalid_pdf_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            render_document(b"not a PDF", "application/pdf")
+
+    def test_oversized_document_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            render_document(
+                b"x" * (MAX_DOCUMENT_BYTES + 1),
+                "application/octet-stream",
+            )
 
     def test_invalid_raster_dimensions_are_rejected(self) -> None:
         with self.assertRaises(ValueError):

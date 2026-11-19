@@ -1,8 +1,8 @@
 # Luck Jingle Printer for Home Assistant
 
-A custom Home Assistant integration that sends text labels directly to Luck
-Jingle-compatible BLE thermal printers. It adds a **Print text** action and a
-test-print button to the printer's device page.
+A custom Home Assistant integration that sends text, PDF pages, and raster
+images directly to Luck Jingle-compatible BLE thermal printers. It adds a
+**Print text** action and a test-print button to the printer's device page.
 
 The BLE commands are based on community reverse-engineered LuckPrinter protocol
 notes. The ORICO C50 has not been independently tested with this integration;
@@ -63,6 +63,74 @@ The text is wrapped to fit the 384-pixel print width. `density` accepts `0`
 printers are configured, set `config_entry_id` to the desired config entry ID.
 When only one printer is configured, it is selected automatically.
 
+## Print from other network devices
+
+When adding the integration, enable **Enable authenticated network printing**
+to expose a text-print endpoint through Home Assistant's existing HTTP server.
+The relay is off by default. For an existing printer, enable it from the
+integration's **Configure** options without removing and re-adding the device.
+When enabled, a diagnostic **Network print relay** binary sensor is added to
+the printer device.
+
+The endpoint accepts UTF-8 text jobs as JSON and raw PDF or raster-image files.
+It uses Home Assistant's normal bearer-token authentication:
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer YOUR_HOME_ASSISTANT_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello from the network","density":1,"feed":80}' \
+  "http://HOME_ASSISTANT:8123/api/luck_jingle/print/CONFIG_ENTRY_ID"
+```
+
+Print a PDF or PNG directly with `curl`:
+
+```sh
+curl --fail -X POST \
+  -H "Authorization: Bearer YOUR_HOME_ASSISTANT_ACCESS_TOKEN" \
+  -H "Content-Type: application/pdf" \
+  --data-binary @document.pdf \
+  "http://HOME_ASSISTANT:8123/api/luck_jingle/print/CONFIG_ENTRY_ID"
+```
+
+For an image, use its MIME type, such as `image/png` or `image/jpeg`, and pass
+the file with `--data-binary`. PDF pages and supported image frames are printed
+as separate labels. Supported raster formats are BMP, GIF, JPEG, PNG, TIFF, and
+WebP. Documents are limited to 8 MiB and 20 pages/frames; images are resized to
+fit the printer's 384-pixel width and 1024-dot maximum page height. Optional
+`density` and `feed` query parameters use the same ranges as the text action.
+Multi-page jobs may take a few minutes because the printer transfers each
+raster page over BLE.
+
+Create a long-lived access token from your Home Assistant profile. Keep it
+private: anyone holding it can use the Home Assistant API. JSON text requests
+accept the same `text`, `density`, and `feed` values as
+`luck_jingle.print_text`. Use HTTPS when traffic crosses an untrusted network,
+and do not expose Home Assistant's HTTP port directly to the Internet. When the
+relay is enabled, find the `config_entry_id` in the attributes of its
+**Network print relay** entity; that value is used in the endpoint URL and CUPS
+device URI.
+
+### Optional CUPS text-only forwarding
+
+CUPS is not installed inside Home Assistant. For a CUPS server on another
+Linux device, install `cups/backend/luckjingle` into CUPS's backend directory,
+make it executable, and configure a text-only queue whose device URI is
+`luckjingle://CONFIG_ENTRY_ID`. Create `/etc/cups/luckjingle.conf` readable only
+by the CUPS service account:
+
+```ini
+[homeassistant]
+url = http://HOME_ASSISTANT:8123
+token = YOUR_HOME_ASSISTANT_ACCESS_TOKEN
+```
+
+The backend forwards UTF-8 text, PDF, and supported raster-image jobs to the
+authenticated endpoint. It supports copies and form-feed-separated text pages.
+Configure a raw/no-conversion queue so CUPS passes PDF and image bytes through
+unchanged; filtered printer-language jobs are not supported. Restart CUPS
+after installing the backend and creating its configuration file.
+
 ## Linux BlueZ connect errors
 
 Some dual-mode LuckPrinter devices advertise both Bluetooth Classic and BLE.
@@ -71,12 +139,14 @@ connection is established. Home Assistant may discover the printer but then
 fail to connect with `br-connection-profile-unavailable` or a BLE connection
 timeout.
 
-The safest workaround is a dedicated BLE adapter or Home Assistant Bluetooth
-proxy. Another option is setting `ControllerMode = le` under `[General]` in
-`/etc/bluetooth/main.conf` on the Linux host, then restarting Bluetooth. This
-disables Bluetooth Classic for every device on that adapter, including
-headphones and other Classic peripherals; do not use it unless that tradeoff is
-acceptable. Removing a stale paired printer entry and retrying may also help.
+The integration now attempts one targeted recovery when the initial BLE
+connection fails: it asks BlueZ to disconnect the printer, then retries once.
+The safest workaround for persistent errors is a dedicated BLE adapter or Home
+Assistant Bluetooth proxy. Another option is setting `ControllerMode = le`
+under `[General]` in `/etc/bluetooth/main.conf` on the Linux host, then
+restarting Bluetooth. This disables Bluetooth Classic for every device on that
+adapter, including headphones and other Classic peripherals; do not use it
+unless that tradeoff is acceptable.
 
 ## Protocol references
 

@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""CUPS backend that forwards text, PDF, and image jobs to Home Assistant."""
+
+from __future__ import annotations
+
+import configparser
+import json
+import os
+import sys
+from http.client import HTTPException
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+CONFIG_PATH = "/etc/cups/luckjingle.conf"
+CONFIG_ENV = "LUCKJINGLE_CUPS_CONFIG"
+MAX_TEXT_LENGTH = 2000
+MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
+
+
+class _RejectRedirectHandler(HTTPRedirectHandler):
+    """Prevent forwarding the Home Assistant bearer token to redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, new_url):
+        return None
+
+
+def _read_config() -> tuple[str, str]:
+    """Load the Home Assistant base URL and bearer token."""
+    config = configparser.ConfigParser(interpolation=None)
+    path = os.environ.get(CONFIG_ENV, CONFIG_PATH)
+    try:
+        if not config.read(path):
+            raise RuntimeError(f"Could not read CUPS backend configuration: {path}")
+    except configparser.Error as err:
+        raise RuntimeError(f"Invalid CUPS backend configuration: {err}") from err
+    try:
+        base_url = config["homeassistant"]["url"].rstrip("/")
+        token = config["homeassistant"]["token"]
+    except KeyError as err:
+        raise RuntimeError(
+            "CUPS configuration must define [homeassistant] url and token"
+        ) from err
+    parsed_url = urlsplit(base_url)
+    if (
+        parsed_url.scheme not in {"http", "https"}
+        or not parsed_url.netloc
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.query
+        or parsed_url.fragment
+        or not token.strip()
+    ):
+        raise RuntimeError("CUPS configuration has an invalid URL or empty token")
+    return base_url, token
+
+
+def _read_job(argv: list[str]) -> bytes:
+    """Read the job file passed by CUPS or the job data from standard input."""
+    if len(argv) > 6 and argv[6] != "-":
+        with open(argv[6], "rb") as job_file:
+            return job_file.read(MAX_DOCUMENT_BYTES + 1)
+    return sys.stdin.buffer.read(MAX_DOCUMENT_BYTES + 1)
+
+
+def _document_content_type(data: bytes) -> str | None:
+    """Identify supported PDF and raster image file signatures."""
+    if b"%PDF-" in data[:1024]:
+        return "application/pdf"
+    if data.startswith(b"%!PS") or data.startswith(b"\x1bE"):
+        raise RuntimeError(
+            "CUPS supplied converted printer-language data; use a raw queue"
+        )
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    if data.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _post_payload(
+    base_url: str,
+    token: str,
+    entry_id: str,
+    payload: bytes,
+    content_type: str,
+) -> None:
+    """Post one text or binary print payload to Home Assistant."""
+    url = f"{base_url}/api/luck_jingle/print/{quote(entry_id, safe='')}"
+    request = Request(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": content_type,
+        },
+        method="POST",
+    )
+    try:
+        with build_opener(_RejectRedirectHandler).open(
+            request, timeout=600
+        ) as response:
+            if response.status < 200 or response.status >= 300:
+                raise RuntimeError(f"Home Assistant returned HTTP {response.status}")
+    except HTTPError as err:
+        detail = err.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"Home Assistant returned HTTP {err.code}: {detail}"
+        ) from err
+    except URLError as err:
+        raise RuntimeError(f"Could not reach Home Assistant: {err.reason}") from err
+    except HTTPException as err:
+        raise RuntimeError(f"Invalid response from Home Assistant: {err}") from err
+
+
+def _post_text(base_url: str, token: str, entry_id: str, text: str) -> None:
+    """Post one text page to the Home Assistant relay."""
+    _post_payload(
+        base_url,
+        token,
+        entry_id,
+        json.dumps({"text": text}).encode("utf-8"),
+        "application/json",
+    )
+
+
+def main(argv: list[str]) -> int:
+    """Forward one CUPS job."""
+    if len(argv) == 1:
+        return 0
+    if len(argv) < 6:
+        print("Invalid CUPS backend arguments", file=sys.stderr)
+        return 1
+
+    try:
+        uri = os.environ.get("DEVICE_URI", argv[0])
+        parsed_uri = urlsplit(uri)
+        entry_id = parsed_uri.netloc or parsed_uri.path.lstrip("/")
+        if parsed_uri.scheme != "luckjingle" or not entry_id:
+            raise RuntimeError("Device URI must be luckjingle://CONFIG_ENTRY_ID")
+
+        copies = int(argv[4])
+        if copies < 1:
+            raise RuntimeError("CUPS requested an invalid copy count")
+
+        job = _read_job(argv)
+        if len(job) > MAX_DOCUMENT_BYTES:
+            raise RuntimeError(
+                f"CUPS jobs must be at most {MAX_DOCUMENT_BYTES} bytes"
+            )
+        base_url, token = _read_config()
+        document_type = _document_content_type(job)
+        if document_type is not None:
+            for _ in range(copies):
+                _post_payload(
+                    base_url,
+                    token,
+                    entry_id,
+                    job,
+                    document_type,
+                )
+        else:
+            text = job.decode("utf-8-sig")
+            if any(
+                ord(character) < 32 and character not in "\t\n\r\f"
+                for character in text
+            ):
+                raise RuntimeError("The CUPS job is not supported UTF-8 text")
+            pages = [page for page in text.split("\f") if page]
+            if not pages:
+                raise RuntimeError("The CUPS job contains no text")
+            if any(len(page) > MAX_TEXT_LENGTH for page in pages):
+                raise RuntimeError(
+                    f"Each text page must be at most {MAX_TEXT_LENGTH} characters"
+                )
+            for _ in range(copies):
+                for page in pages:
+                    _post_text(base_url, token, entry_id, page)
+    except (OSError, UnicodeDecodeError, RuntimeError, ValueError) as err:
+        print(f"luckjingle CUPS backend: {err}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
