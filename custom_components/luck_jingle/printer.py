@@ -15,6 +15,7 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from .discovery import ble_device_for_source
 from .protocol import (
     ENABLE,
     RASTER_CHUNK_SIZE,
@@ -45,12 +46,14 @@ class LuckJinglePrinter:
         address: str,
         name: str,
         *,
+        bluetooth_adapter: str | None = None,
         network_print_enabled: bool = False,
     ) -> None:
         """Initialize a printer."""
         self.hass = hass
         self.address = address
         self.name = name
+        self.bluetooth_adapter = bluetooth_adapter
         self.network_print_enabled = network_print_enabled
         self._job_lock = asyncio.Lock()
         self._ack_queue: asyncio.Queue[bytes] = asyncio.Queue()
@@ -77,10 +80,23 @@ class LuckJinglePrinter:
                 raise HomeAssistantError("The rendered label has an unsupported height")
 
         async with self._job_lock:
-            ble_device = bluetooth.async_ble_device_from_address(
-                self.hass, self.address, connectable=True
-            )
+            if self.bluetooth_adapter is None:
+                ble_device = bluetooth.async_ble_device_from_address(
+                    self.hass, self.address, connectable=True
+                )
+            else:
+                ble_device = ble_device_for_source(
+                    bluetooth.async_scanner_devices_by_address(
+                        self.hass, self.address, connectable=True
+                    ),
+                    self.bluetooth_adapter,
+                )
             if ble_device is None:
+                if self.bluetooth_adapter is not None:
+                    raise HomeAssistantError(
+                        f"{self.name} is not currently visible through Bluetooth "
+                        f"source {self.bluetooth_adapter}"
+                    )
                 raise HomeAssistantError(
                     f"{self.name} is not currently visible to Home Assistant Bluetooth"
                 )

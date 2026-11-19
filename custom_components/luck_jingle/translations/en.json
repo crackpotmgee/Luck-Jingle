@@ -14,10 +14,18 @@
         "data": {
           "address": "Nearby printer"
         }
+      },
+      "select_adapter": {
+        "title": "Select Bluetooth adapter",
+        "description": "Choose Automatic to let Home Assistant select a source, or select the Bluetooth source that sees this printer.",
+        "data": {
+          "bluetooth_adapter": "Bluetooth source"
+        }
       }
     },
     "error": {
-      "printer_not_found": "The printer was not found over BLE. Turn it on, move it near Home Assistant, and try again."
+      "printer_not_found": "The printer was not found over BLE. Turn it on, move it near Home Assistant, and try again.",
+      "bluetooth_adapter_not_found": "That Bluetooth source is no longer available for this printer. Select another source or Automatic."
     },
     "abort": {
       "already_configured": "This printer is already configured."
@@ -26,12 +34,16 @@
   "options": {
     "step": {
       "init": {
-        "title": "Network print relay",
-        "description": "Toggle the authenticated HTTP print endpoint for this printer.",
+        "title": "Printer options",
+        "description": "Choose the Bluetooth source for this printer and configure the authenticated HTTP print relay.",
         "data": {
+          "bluetooth_adapter": "Bluetooth source",
           "enable_network_print": "Enable authenticated network printing"
         }
       }
+    },
+    "error": {
+      "bluetooth_adapter_not_found": "That Bluetooth source is no longer available for this printer. Select another source or Automatic."
     }
   },
   "entity": {

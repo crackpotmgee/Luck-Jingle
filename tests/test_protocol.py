@@ -4,6 +4,7 @@ import unittest
 from importlib.util import module_from_spec, spec_from_file_location
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -155,6 +156,34 @@ class DiscoveryTests(unittest.TestCase):
             DISCOVERY.printer_display_name("LPC50_3F3D_BLE", "lpc50"),
             "LPC50_3F3D",
         )
+
+    def test_adapter_sources_are_unique_and_sorted(self) -> None:
+        devices = [
+            SimpleNamespace(scanner=SimpleNamespace(source="hci1")),
+            SimpleNamespace(scanner=SimpleNamespace(source="hci0")),
+            SimpleNamespace(scanner=SimpleNamespace(source="hci1")),
+        ]
+
+        self.assertEqual(DISCOVERY.adapter_sources(devices), ["hci0", "hci1"])
+
+    def test_selects_ble_device_for_requested_source(self) -> None:
+        hci0_device = object()
+        hci1_device = object()
+        devices = [
+            SimpleNamespace(
+                scanner=SimpleNamespace(source="hci0"),
+                ble_device=hci0_device,
+            ),
+            SimpleNamespace(
+                scanner=SimpleNamespace(source="hci1"),
+                ble_device=hci1_device,
+            ),
+        ]
+
+        self.assertIs(
+            DISCOVERY.ble_device_for_source(devices, "hci1"), hci1_device
+        )
+        self.assertIsNone(DISCOVERY.ble_device_for_source(devices, "hci2"))
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ integration inside HACS.](https://my.home-assistant.io/badges/hacs_repository.sv
 6. Select **LPC50 (ORICO C50)**. Home Assistant scans for a matching BLE
    advertisement and selects the printer automatically. If multiple matching
    printers are nearby, choose the one to configure.
+7. Choose **Automatic** or a Bluetooth source that sees the printer. For an
+   existing entry, change this from the integration's **Configure** options.
 
 The QR label is not needed for setup. It contains the printer name and its
 Bluetooth Classic address; Home Assistant discovers and connects to the
@@ -43,6 +45,9 @@ restart Home Assistant.
 - Home Assistant must see the printer's BLE advertisement during setup. The QR
   payload identifies the printer by name so setup can resolve its BLE address,
   even though the QR contains a different Bluetooth Classic address.
+- If Home Assistant has multiple Bluetooth adapters, select the source that
+  reports the printer. The selector lists sources currently seeing that printer;
+  **Automatic** keeps Home Assistant's default source selection.
 - Linux/BlueZ can fail to connect to some dual-mode printers because it attempts
   Bluetooth Classic first. See the [BlueZ note](#linux-bluez-connect-errors).
 

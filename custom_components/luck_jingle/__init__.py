@@ -16,7 +16,9 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    BLUETOOTH_ADAPTER_AUTO,
     CONF_ADDRESS,
+    CONF_BLUETOOTH_ADAPTER,
     CONF_ENABLE_NETWORK_PRINT,
     CONF_NAME,
     DOMAIN,
@@ -185,10 +187,19 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up a configured printer."""
     printers: dict[str, LuckJinglePrinter] = hass.data.setdefault(DOMAIN, {})
+    bluetooth_adapter = entry.options.get(
+        CONF_BLUETOOTH_ADAPTER,
+        entry.data.get(CONF_BLUETOOTH_ADAPTER, BLUETOOTH_ADAPTER_AUTO),
+    )
     printer = LuckJinglePrinter(
         hass,
         entry.data[CONF_ADDRESS],
         entry.data[CONF_NAME],
+        bluetooth_adapter=(
+            None
+            if bluetooth_adapter == BLUETOOTH_ADAPTER_AUTO
+            else bluetooth_adapter
+        ),
         network_print_enabled=entry.options.get(
             CONF_ENABLE_NETWORK_PRINT,
             entry.data.get(CONF_ENABLE_NETWORK_PRINT, False),
