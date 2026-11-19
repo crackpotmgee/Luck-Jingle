@@ -20,6 +20,7 @@ from .const import (
     CONF_ADDRESS,
     CONF_BLUETOOTH_ADAPTER,
     CONF_ENABLE_NETWORK_PRINT,
+    CONF_KEEP_CONNECTION_ALIVE,
     CONF_NAME,
     DOMAIN,
     PLATFORMS,
@@ -216,6 +217,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             CONF_ENABLE_NETWORK_PRINT,
             entry.data.get(CONF_ENABLE_NETWORK_PRINT, False),
         ),
+        keep_connection_alive=entry.options.get(
+            CONF_KEEP_CONNECTION_ALIVE,
+            entry.data.get(CONF_KEEP_CONNECTION_ALIVE, False),
+        ),
     )
     printers[entry.entry_id] = printer
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -239,7 +244,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the printer after its relay options change."""
+    """Reload the printer after its options change."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
@@ -249,6 +254,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
 
     printers: dict[str, LuckJinglePrinter] = hass.data[DOMAIN]
+    printer = printers[entry.entry_id]
+    await printer.async_shutdown()
     printers.pop(entry.entry_id)
     if not printers:
         hass.services.async_remove(DOMAIN, SERVICE_PRINT_TEXT)

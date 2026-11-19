@@ -35,10 +35,11 @@
     "step": {
       "init": {
         "title": "Printer options",
-        "description": "Choose the Bluetooth source for this printer and configure the authenticated HTTP print relay.",
+        "description": "Choose the Bluetooth source, authenticated HTTP print relay, and connection behavior for this printer.",
         "data": {
           "bluetooth_adapter": "Bluetooth source",
-          "enable_network_print": "Enable authenticated network printing"
+          "enable_network_print": "Enable authenticated network printing",
+          "keep_connection_alive": "Keep Bluetooth connection open between print jobs"
         }
       }
     },

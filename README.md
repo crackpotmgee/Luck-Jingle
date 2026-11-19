@@ -48,6 +48,11 @@ restart Home Assistant.
 - If Home Assistant has multiple Bluetooth adapters, select the source that
   reports the printer. The selector lists sources currently seeing that printer;
   **Automatic** keeps Home Assistant's default source selection.
+- In the integration's **Configure** options, enable **Keep Bluetooth
+  connection open between print jobs** to reuse the BLE connection instead of
+  disconnecting after each successful job. This is off by default. The printer
+  may still close an idle connection itself; the integration reconnects on the
+  next print.
 - Linux/BlueZ can fail to connect to some dual-mode printers because it attempts
   Bluetooth Classic first. See the [BlueZ note](#linux-bluez-connect-errors).
 

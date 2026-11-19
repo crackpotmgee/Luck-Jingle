@@ -51,6 +51,7 @@ class LuckJinglePrinter:
         *,
         bluetooth_adapter: str | None = None,
         network_print_enabled: bool = False,
+        keep_connection_alive: bool = False,
     ) -> None:
         """Initialize a printer."""
         self.hass = hass
@@ -58,6 +59,8 @@ class LuckJinglePrinter:
         self.name = name
         self.bluetooth_adapter = bluetooth_adapter
         self.network_print_enabled = network_print_enabled
+        self.keep_connection_alive = keep_connection_alive
+        self._client: BleakClient | None = None
         self._job_lock = asyncio.Lock()
         self._ack_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -88,103 +91,17 @@ class LuckJinglePrinter:
                 raise HomeAssistantError("The rendered label has an unsupported height")
 
         async with self._job_lock:
-            scanner_devices = list(
-                bluetooth.async_scanner_devices_by_address(
-                    self.hass,
-                    self.address,
-                    connectable=True,
-                )
-            )
-            ordered_devices = scanner_devices_in_connection_order(
-                scanner_devices,
-                self.bluetooth_adapter,
-            )
-            connection_candidates: list[tuple[str, BLEDevice]] = []
-            seen_paths: set[str] = set()
-            seen_devices: set[int] = set()
-
-            def add_candidate(source: str, device: BLEDevice) -> None:
-                path = _bluez_device_path(device)
-                if path is not None:
-                    if path in seen_paths:
-                        return
-                    seen_paths.add(path)
-                else:
-                    device_id = id(device)
-                    if device_id in seen_devices:
-                        return
-                    seen_devices.add(device_id)
-                connection_candidates.append((source, device))
-
-            if self.bluetooth_adapter is None:
-                preferred_device = bluetooth.async_ble_device_from_address(
-                    self.hass, self.address, connectable=True
-                )
-                if preferred_device is not None:
-                    preferred_path = _bluez_device_path(preferred_device)
-                    preferred_source = next(
-                        (
-                            device.scanner.source
-                            for device in scanner_devices
-                            if (
-                                preferred_path is not None
-                                and _bluez_device_path(device.ble_device)
-                                == preferred_path
-                            )
-                            or device.ble_device is preferred_device
-                        ),
-                        "automatic",
-                    )
-                    add_candidate(preferred_source, preferred_device)
-
-            for scanner_device in ordered_devices:
-                add_candidate(
-                    scanner_device.scanner.source,
-                    scanner_device.ble_device,
-                )
-
-            if not connection_candidates:
-                if self.bluetooth_adapter is not None:
-                    raise HomeAssistantError(
-                        f"{self.name} is not currently visible through Bluetooth "
-                        f"source {self.bluetooth_adapter}"
-                    )
-                raise HomeAssistantError(
-                    f"{self.name} is not currently visible to Home Assistant Bluetooth"
-                )
-
-            client = None
-            connection_errors: list[str] = []
-            for index, (source, ble_device) in enumerate(connection_candidates):
-                try:
-                    client = await self._async_connect(ble_device)
-                    if index:
-                        _LOGGER.warning(
-                            "Connected to %s through Bluetooth source %s after "
-                            "the preferred source failed",
-                            self.name,
-                            source,
-                        )
-                    break
-                except HomeAssistantError as err:
-                    connection_errors.append(f"{source}: {err}")
-                    if index + 1 < len(connection_candidates):
-                        _LOGGER.warning(
-                            "Could not connect to %s through Bluetooth source %s; "
-                            "trying another visible source: %s",
-                            self.name,
-                            source,
-                            err,
-                        )
+            client = self._client if self.keep_connection_alive else None
+            if client is not None and not client.is_connected:
+                self._client = None
+                client = None
             if client is None:
-                raise HomeAssistantError(
-                    f"Could not connect to {self.name} over Bluetooth LE using "
-                    f"any visible source: {'; '.join(connection_errors)}"
-                )
-
+                client = await self._async_connect_printer()
+                if self.keep_connection_alive:
+                    self._client = client
             self._ack_queue = asyncio.Queue()
+            completed = False
             try:
-                await client.start_notify(ACK_UUID, self._handle_ack)
                 for bitmap in bitmaps:
                     rows = len(bitmap) // WIDTH_BYTES
                     self._ack_queue = asyncio.Queue()
@@ -201,8 +118,127 @@ class LuckJinglePrinter:
                     await self._wait_for_ack(RASTER_ACK_TIMEOUT)
                     await self._write(client, feed_command(feed))
                     await self._write(client, STOP)
+                completed = True
             finally:
+                if self.keep_connection_alive and not completed:
+                    if self._client is client:
+                        self._client = None
+                    await client.disconnect()
+                elif not self.keep_connection_alive:
+                    await client.disconnect()
+
+    async def async_shutdown(self) -> None:
+        """Disconnect the printer when the config entry is unloaded."""
+        async with self._job_lock:
+            client = self._client
+            if client is not None and client.is_connected:
                 await client.disconnect()
+            self._client = None
+
+    async def _async_connect_printer(self) -> BleakClient:
+        """Connect to a visible printer and subscribe to its acknowledgements."""
+        scanner_devices = list(
+            bluetooth.async_scanner_devices_by_address(
+                self.hass,
+                self.address,
+                connectable=True,
+            )
+        )
+        ordered_devices = scanner_devices_in_connection_order(
+            scanner_devices,
+            self.bluetooth_adapter,
+        )
+        connection_candidates: list[tuple[str, BLEDevice]] = []
+        seen_paths: set[str] = set()
+        seen_devices: set[int] = set()
+
+        def add_candidate(source: str, device: BLEDevice) -> None:
+            path = _bluez_device_path(device)
+            if path is not None:
+                if path in seen_paths:
+                    return
+                seen_paths.add(path)
+            else:
+                device_id = id(device)
+                if device_id in seen_devices:
+                    return
+                seen_devices.add(device_id)
+            connection_candidates.append((source, device))
+
+        if self.bluetooth_adapter is None:
+            preferred_device = bluetooth.async_ble_device_from_address(
+                self.hass, self.address, connectable=True
+            )
+            if preferred_device is not None:
+                preferred_path = _bluez_device_path(preferred_device)
+                preferred_source = next(
+                    (
+                        device.scanner.source
+                        for device in scanner_devices
+                        if (
+                            preferred_path is not None
+                            and _bluez_device_path(device.ble_device)
+                            == preferred_path
+                        )
+                        or device.ble_device is preferred_device
+                    ),
+                    "automatic",
+                )
+                add_candidate(preferred_source, preferred_device)
+
+        for scanner_device in ordered_devices:
+            add_candidate(
+                scanner_device.scanner.source,
+                scanner_device.ble_device,
+            )
+
+        if not connection_candidates:
+            if self.bluetooth_adapter is not None:
+                raise HomeAssistantError(
+                    f"{self.name} is not currently visible through Bluetooth "
+                    f"source {self.bluetooth_adapter}"
+                )
+            raise HomeAssistantError(
+                f"{self.name} is not currently visible to Home Assistant Bluetooth"
+            )
+
+        client = None
+        connection_errors: list[str] = []
+        for index, (source, ble_device) in enumerate(connection_candidates):
+            try:
+                client = await self._async_connect(ble_device)
+                if index:
+                    _LOGGER.warning(
+                        "Connected to %s through Bluetooth source %s after "
+                        "the preferred source failed",
+                        self.name,
+                        source,
+                    )
+                break
+            except HomeAssistantError as err:
+                connection_errors.append(f"{source}: {err}")
+                if index + 1 < len(connection_candidates):
+                    _LOGGER.warning(
+                        "Could not connect to %s through Bluetooth source %s; "
+                        "trying another visible source: %s",
+                        self.name,
+                        source,
+                        err,
+                    )
+        if client is None:
+            raise HomeAssistantError(
+                f"Could not connect to {self.name} over Bluetooth LE using "
+                f"any visible source: {'; '.join(connection_errors)}"
+            )
+
+        subscribed = False
+        try:
+            await client.start_notify(ACK_UUID, self._handle_ack)
+            subscribed = True
+        finally:
+            if not subscribed:
+                await client.disconnect()
+        return client
 
     async def _async_connect(self, ble_device: BLEDevice) -> BleakClient:
         """Prefer LE and retry once after disconnecting a stale BlueZ link."""

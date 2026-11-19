@@ -6,6 +6,7 @@ DOMAIN = "luck_jingle"
 
 CONF_ADDRESS = "address"
 CONF_BLUETOOTH_ADAPTER = "bluetooth_adapter"
+CONF_KEEP_CONNECTION_ALIVE = "keep_connection_alive"
 CONF_ENABLE_NETWORK_PRINT = "enable_network_print"
 CONF_MODEL = "model"
 CONF_NAME = "name"

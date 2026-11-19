@@ -22,6 +22,7 @@ from .const import (
     CONF_ADDRESS,
     CONF_BLUETOOTH_ADAPTER,
     CONF_ENABLE_NETWORK_PRINT,
+    CONF_KEEP_CONNECTION_ALIVE,
     CONF_MODEL,
     CONF_NAME,
     DOMAIN,
@@ -243,12 +244,12 @@ def _adapter_options_for_address(
 
 
 class LuckJingleOptionsFlow(config_entries.OptionsFlow):
-    """Configure network printing for an existing printer entry."""
+    """Configure an existing printer entry."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        """Configure the network print relay and Bluetooth adapter."""
+        """Configure the network print relay and Bluetooth connection."""
         address = self.config_entry.data[CONF_ADDRESS]
         adapters = _adapter_options_for_address(self.hass, address)
         enabled = self.config_entry.options.get(
@@ -260,6 +261,10 @@ class LuckJingleOptionsFlow(config_entries.OptionsFlow):
             self.config_entry.data.get(
                 CONF_BLUETOOTH_ADAPTER, BLUETOOTH_ADAPTER_AUTO
             ),
+        )
+        keep_connection_alive = self.config_entry.options.get(
+            CONF_KEEP_CONNECTION_ALIVE,
+            self.config_entry.data.get(CONF_KEEP_CONNECTION_ALIVE, False),
         )
         if (
             selected_adapter != BLUETOOTH_ADAPTER_AUTO
@@ -289,6 +294,10 @@ class LuckJingleOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_ENABLE_NETWORK_PRINT,
                         default=enabled,
+                    ): BooleanSelector(),
+                    vol.Required(
+                        CONF_KEEP_CONNECTION_ALIVE,
+                        default=keep_connection_alive,
                     ): BooleanSelector(),
                 }
             ),
