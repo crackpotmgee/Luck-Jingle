@@ -29,7 +29,7 @@ from .const import (
 from .discovery import (
     MODEL_LPC50,
     SUPPORTED_MODELS,
-    adapter_sources,
+    adapter_options,
     matches_model,
     printer_display_name,
 )
@@ -40,15 +40,17 @@ MODEL_MATCHERS = {
 }
 
 
-def _bluetooth_adapter_selector(sources: list[str]) -> SelectSelector:
+def _bluetooth_adapter_selector(
+    adapters: list[tuple[str, str]],
+) -> SelectSelector:
     """Create a selector for automatic or source-specific Bluetooth."""
     return SelectSelector(
         SelectSelectorConfig(
             options=[
                 SelectOptionDict(value=BLUETOOTH_ADAPTER_AUTO, label="Automatic"),
                 *[
-                    SelectOptionDict(value=source, label=source)
-                    for source in sources
+                    SelectOptionDict(value=source, label=label)
+                    for source, label in adapters
                 ],
             ],
             mode=SelectSelectorMode.DROPDOWN,
@@ -161,7 +163,8 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Select which Home Assistant Bluetooth scanner should connect."""
-        sources = _adapter_sources_for_address(self.hass, self._printer_address)
+        adapters = _adapter_options_for_address(self.hass, self._printer_address)
+        sources = [source for source, _ in adapters]
         options = [BLUETOOTH_ADAPTER_AUTO, *sources]
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -184,7 +187,7 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_BLUETOOTH_ADAPTER,
                         default=BLUETOOTH_ADAPTER_AUTO,
-                    ): _bluetooth_adapter_selector(sources)
+                    ): _bluetooth_adapter_selector(adapters)
                 }
             ),
             errors=errors,
@@ -226,9 +229,11 @@ class LuckJingleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
 
-def _adapter_sources_for_address(hass: HomeAssistant, address: str) -> list[str]:
-    """Return Home Assistant Bluetooth sources currently seeing a printer."""
-    return adapter_sources(
+def _adapter_options_for_address(
+    hass: HomeAssistant, address: str
+) -> list[tuple[str, str]]:
+    """Return named Home Assistant Bluetooth sources currently seeing a printer."""
+    return adapter_options(
         bluetooth.async_scanner_devices_by_address(
             hass,
             address,
@@ -245,7 +250,7 @@ class LuckJingleOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Configure the network print relay and Bluetooth adapter."""
         address = self.config_entry.data[CONF_ADDRESS]
-        sources = _adapter_sources_for_address(self.hass, address)
+        adapters = _adapter_options_for_address(self.hass, address)
         enabled = self.config_entry.options.get(
             CONF_ENABLE_NETWORK_PRINT,
             self.config_entry.data.get(CONF_ENABLE_NETWORK_PRINT, False),
@@ -258,10 +263,13 @@ class LuckJingleOptionsFlow(config_entries.OptionsFlow):
         )
         if (
             selected_adapter != BLUETOOTH_ADAPTER_AUTO
-            and selected_adapter not in sources
+            and selected_adapter not in {source for source, _ in adapters}
         ):
-            sources.append(selected_adapter)
-            sources.sort()
+            adapters.append(
+                (selected_adapter, f"{selected_adapter} (not currently visible)")
+            )
+            adapters.sort()
+        sources = {source for source, _ in adapters}
         adapter_values = {BLUETOOTH_ADAPTER_AUTO, *sources}
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -277,7 +285,7 @@ class LuckJingleOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         CONF_BLUETOOTH_ADAPTER,
                         default=selected_adapter,
-                    ): _bluetooth_adapter_selector(sources),
+                    ): _bluetooth_adapter_selector(adapters),
                     vol.Required(
                         CONF_ENABLE_NETWORK_PRINT,
                         default=enabled,

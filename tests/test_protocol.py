@@ -157,14 +157,37 @@ class DiscoveryTests(unittest.TestCase):
             "LPC50_3F3D",
         )
 
-    def test_adapter_sources_are_unique_and_sorted(self) -> None:
+    def test_adapter_options_include_names_and_sources(self) -> None:
         devices = [
-            SimpleNamespace(scanner=SimpleNamespace(source="hci1")),
-            SimpleNamespace(scanner=SimpleNamespace(source="hci0")),
-            SimpleNamespace(scanner=SimpleNamespace(source="hci1")),
+            SimpleNamespace(
+                scanner=SimpleNamespace(
+                    source="88:A2:9E:34:50:9B",
+                    name="Home Assistant",
+                    adapter="hci1",
+                )
+            ),
+            SimpleNamespace(
+                scanner=SimpleNamespace(
+                    source="8A:88:4B:E3:47:E4",
+                    name="Home Assistant #1",
+                    adapter="hci0",
+                )
+            ),
         ]
 
-        self.assertEqual(DISCOVERY.adapter_sources(devices), ["hci0", "hci1"])
+        self.assertEqual(
+            DISCOVERY.adapter_options(devices),
+            [
+                (
+                    "88:A2:9E:34:50:9B",
+                    "Home Assistant (hci1) - 88:A2:9E:34:50:9B",
+                ),
+                (
+                    "8A:88:4B:E3:47:E4",
+                    "Home Assistant #1 (hci0) - 8A:88:4B:E3:47:E4",
+                ),
+            ],
+        )
 
     def test_selects_ble_device_for_requested_source(self) -> None:
         hci0_device = object()
@@ -184,6 +207,28 @@ class DiscoveryTests(unittest.TestCase):
             DISCOVERY.ble_device_for_source(devices, "hci1"), hci1_device
         )
         self.assertIsNone(DISCOVERY.ble_device_for_source(devices, "hci2"))
+
+    def test_orders_selected_source_first_and_keeps_fallbacks(self) -> None:
+        hci0_device = SimpleNamespace(
+            scanner=SimpleNamespace(source="hci0"),
+        )
+        hci1_device = SimpleNamespace(
+            scanner=SimpleNamespace(source="hci1"),
+        )
+        devices = [hci0_device, hci1_device]
+
+        self.assertEqual(
+            DISCOVERY.scanner_devices_in_connection_order(devices, "hci1"),
+            [hci1_device, hci0_device],
+        )
+        self.assertEqual(
+            DISCOVERY.scanner_devices_in_connection_order(devices, None),
+            devices,
+        )
+        self.assertEqual(
+            DISCOVERY.scanner_devices_in_connection_order(devices, "missing"),
+            devices,
+        )
 
 
 if __name__ == "__main__":

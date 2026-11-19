@@ -19,6 +19,12 @@ class _BluetoothScanner(Protocol):
     @property
     def source(self) -> str: ...
 
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def adapter(self) -> str: ...
+
 
 class _BluetoothScannerDevice(Protocol[_BluetoothDevice]):
     """The device fields exposed by Home Assistant's Bluetooth manager."""
@@ -30,11 +36,23 @@ class _BluetoothScannerDevice(Protocol[_BluetoothDevice]):
     def ble_device(self) -> _BluetoothDevice: ...
 
 
-def adapter_sources(
+def adapter_options(
     scanner_devices: Iterable[_BluetoothScannerDevice[object]],
-) -> list[str]:
-    """Return unique source identifiers for scanners that see a device."""
-    return sorted({device.scanner.source for device in scanner_devices})
+) -> list[tuple[str, str]]:
+    """Return source identifiers with friendly names for scanners seeing a device."""
+    options: dict[str, str] = {}
+    for device in scanner_devices:
+        scanner = device.scanner
+        name = scanner.name or scanner.adapter or scanner.source
+        adapter = (
+            f" ({scanner.adapter})"
+            if scanner.adapter and scanner.adapter != name
+            else ""
+        )
+        options[scanner.source] = (
+            f"{name}{adapter} - {scanner.source}"
+        )
+    return sorted(options.items())
 
 
 def ble_device_for_source(
@@ -49,6 +67,20 @@ def ble_device_for_source(
             if device.scanner.source == source
         ),
         None,
+    )
+
+
+def scanner_devices_in_connection_order(
+    scanner_devices: Iterable[_BluetoothScannerDevice[_BluetoothDevice]],
+    preferred_source: str | None,
+) -> list[_BluetoothScannerDevice[_BluetoothDevice]]:
+    """Put the preferred scanner first without discarding other BLE paths."""
+    devices = list(scanner_devices)
+    if preferred_source is None:
+        return devices
+    return sorted(
+        devices,
+        key=lambda device: device.scanner.source != preferred_source,
     )
 
 

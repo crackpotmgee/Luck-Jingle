@@ -136,22 +136,20 @@ Configure a raw/no-conversion queue so CUPS passes PDF and image bytes through
 unchanged; filtered printer-language jobs are not supported. Restart CUPS
 after installing the backend and creating its configuration file.
 
-## Linux BlueZ connect errors
+## Linux BlueZ connection issues
 
 Some dual-mode LuckPrinter devices advertise both Bluetooth Classic and BLE.
-On Linux, BlueZ may try the Classic printer profile first and fail before a BLE
-connection is established. Home Assistant may discover the printer but then
-fail to connect with `br-connection-profile-unavailable` or a BLE connection
-timeout.
+BlueZ can choose the Classic bearer for its initial connection, even though
+printing requires BLE GATT. The integration now prefers LE for this printer's
+BlueZ device entry, disconnects a stale link on the exact selected adapter, and
+tries other visible Home Assistant Bluetooth sources if the preferred source
+cannot connect. This is a per-printer preference; it does not disable Classic
+Bluetooth for other devices.
 
-The integration now attempts one targeted recovery when the initial BLE
-connection fails: it asks BlueZ to disconnect the printer, then retries once.
-The safest workaround for persistent errors is a dedicated BLE adapter or Home
-Assistant Bluetooth proxy. Another option is setting `ControllerMode = le`
-under `[General]` in `/etc/bluetooth/main.conf` on the Linux host, then
-restarting Bluetooth. This disables Bluetooth Classic for every device on that
-adapter, including headphones and other Classic peripherals; do not use it
-unless that tradeoff is acceptable.
+If connection attempts still time out, move the printer or Bluetooth adapter
+closer. A dedicated USB BLE adapter or Home Assistant Bluetooth proxy can also
+improve reception. The source selector is a preference: if that source cannot
+connect, the integration may fall back to another source Home Assistant sees.
 
 ## Protocol references
 

@@ -15,7 +15,7 @@ from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from .discovery import ble_device_for_source
+from .discovery import scanner_devices_in_connection_order
 from .protocol import (
     ENABLE,
     RASTER_CHUNK_SIZE,
@@ -33,6 +33,8 @@ ACK_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
 
 ACK_TIMEOUT = 10
 RASTER_ACK_TIMEOUT = 60
+BLE_CONNECT_TIMEOUT = 15
+DBUS_COMMAND_TIMEOUT = 5
 WRITE_DELAY = 0.035
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,18 +82,62 @@ class LuckJinglePrinter:
                 raise HomeAssistantError("The rendered label has an unsupported height")
 
         async with self._job_lock:
+            scanner_devices = list(
+                bluetooth.async_scanner_devices_by_address(
+                    self.hass,
+                    self.address,
+                    connectable=True,
+                )
+            )
+            ordered_devices = scanner_devices_in_connection_order(
+                scanner_devices,
+                self.bluetooth_adapter,
+            )
+            connection_candidates: list[tuple[str, BLEDevice]] = []
+            seen_paths: set[str] = set()
+            seen_devices: set[int] = set()
+
+            def add_candidate(source: str, device: BLEDevice) -> None:
+                path = _bluez_device_path(device)
+                if path is not None:
+                    if path in seen_paths:
+                        return
+                    seen_paths.add(path)
+                else:
+                    device_id = id(device)
+                    if device_id in seen_devices:
+                        return
+                    seen_devices.add(device_id)
+                connection_candidates.append((source, device))
+
             if self.bluetooth_adapter is None:
-                ble_device = bluetooth.async_ble_device_from_address(
+                preferred_device = bluetooth.async_ble_device_from_address(
                     self.hass, self.address, connectable=True
                 )
-            else:
-                ble_device = ble_device_for_source(
-                    bluetooth.async_scanner_devices_by_address(
-                        self.hass, self.address, connectable=True
-                    ),
-                    self.bluetooth_adapter,
+                if preferred_device is not None:
+                    preferred_path = _bluez_device_path(preferred_device)
+                    preferred_source = next(
+                        (
+                            device.scanner.source
+                            for device in scanner_devices
+                            if (
+                                preferred_path is not None
+                                and _bluez_device_path(device.ble_device)
+                                == preferred_path
+                            )
+                            or device.ble_device is preferred_device
+                        ),
+                        "automatic",
+                    )
+                    add_candidate(preferred_source, preferred_device)
+
+            for scanner_device in ordered_devices:
+                add_candidate(
+                    scanner_device.scanner.source,
+                    scanner_device.ble_device,
                 )
-            if ble_device is None:
+
+            if not connection_candidates:
                 if self.bluetooth_adapter is not None:
                     raise HomeAssistantError(
                         f"{self.name} is not currently visible through Bluetooth "
@@ -101,7 +147,35 @@ class LuckJinglePrinter:
                     f"{self.name} is not currently visible to Home Assistant Bluetooth"
                 )
 
-            client = await self._async_connect(ble_device)
+            client = None
+            connection_errors: list[str] = []
+            for index, (source, ble_device) in enumerate(connection_candidates):
+                try:
+                    client = await self._async_connect(ble_device)
+                    if index:
+                        _LOGGER.warning(
+                            "Connected to %s through Bluetooth source %s after "
+                            "the preferred source failed",
+                            self.name,
+                            source,
+                        )
+                    break
+                except HomeAssistantError as err:
+                    connection_errors.append(f"{source}: {err}")
+                    if index + 1 < len(connection_candidates):
+                        _LOGGER.warning(
+                            "Could not connect to %s through Bluetooth source %s; "
+                            "trying another visible source: %s",
+                            self.name,
+                            source,
+                            err,
+                        )
+            if client is None:
+                raise HomeAssistantError(
+                    f"Could not connect to {self.name} over Bluetooth LE using "
+                    f"any visible source: {'; '.join(connection_errors)}"
+                )
+
             self._ack_queue = asyncio.Queue()
             try:
                 await client.start_notify(ACK_UUID, self._handle_ack)
@@ -125,12 +199,15 @@ class LuckJinglePrinter:
                 await client.disconnect()
 
     async def _async_connect(self, ble_device: BLEDevice) -> BleakClient:
-        """Connect, clearing a stale BlueZ link once if the first attempt fails."""
+        """Prefer LE and retry once after disconnecting a stale BlueZ link."""
+        await self._async_set_le_bearer(ble_device)
         try:
             return await establish_connection(
                 BleakClient,
                 ble_device,
                 self.name,
+                max_attempts=1,
+                timeout=BLE_CONNECT_TIMEOUT,
             )
         except BleakError as first_error:
             _LOGGER.warning(
@@ -140,7 +217,7 @@ class LuckJinglePrinter:
                 first_error,
             )
             try:
-                await self._async_disconnect_stale_link()
+                await self._async_disconnect_stale_link(ble_device)
             except HomeAssistantError as err:
                 raise HomeAssistantError(
                     f"Could not connect to {self.name} over Bluetooth LE: "
@@ -152,6 +229,8 @@ class LuckJinglePrinter:
                     BleakClient,
                     ble_device,
                     self.name,
+                    max_attempts=1,
+                    timeout=BLE_CONNECT_TIMEOUT,
                 )
             except BleakError as retry_error:
                 raise HomeAssistantError(
@@ -159,23 +238,67 @@ class LuckJinglePrinter:
                     f"clearing a stale connection: {retry_error}"
                 ) from retry_error
 
-    async def _async_disconnect_stale_link(self) -> None:
-        """Ask BlueZ to disconnect this printer before retrying GATT."""
+    async def _async_set_le_bearer(self, ble_device: BLEDevice) -> None:
+        """Tell BlueZ to use LE for this dual-mode printer."""
+        path = _bluez_device_path(ble_device)
+        properties = ble_device.details.get("props")
+        if (
+            path is None
+            or not isinstance(properties, dict)
+            or "PreferredBearer" not in properties
+            or properties["PreferredBearer"] == "le"
+        ):
+            return
+
+        await self._async_bluez_device_command(
+            path,
+            "org.freedesktop.DBus.Properties.Set",
+            "string:org.bluez.Device1",
+            "string:PreferredBearer",
+            "variant:string:le",
+        )
+
+    async def _async_disconnect_stale_link(self, ble_device: BLEDevice) -> None:
+        """Ask BlueZ to disconnect this adapter's printer link before retrying."""
+        path = _bluez_device_path(ble_device)
+        if path is None:
+            return
+
+        try:
+            await self._async_bluez_device_command(
+                path,
+                "org.bluez.Device1.Disconnect",
+            )
+        except HomeAssistantError as err:
+            if "org.bluez.Error.NotConnected" not in str(err):
+                raise
+
+    async def _async_bluez_device_command(
+        self, path: str, member: str, *arguments: str
+    ) -> None:
+        """Run one BlueZ D-Bus operation for the selected adapter device."""
         try:
             process = await asyncio.create_subprocess_exec(
-                "bluetoothctl",
-                "disconnect",
-                self.address,
+                "dbus-send",
+                "--system",
+                "--print-reply",
+                "--dest=org.bluez",
+                path,
+                member,
+                *arguments,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
         except OSError as err:
             raise HomeAssistantError(
-                f"Could not start bluetoothctl to reset {self.name}: {err}"
+                f"Could not run a BlueZ command for {self.name}: {err}"
             ) from err
 
         try:
-            output, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            output, _ = await asyncio.wait_for(
+                process.communicate(),
+                timeout=DBUS_COMMAND_TIMEOUT,
+            )
         except TimeoutError as err:
             try:
                 process.kill()
@@ -183,15 +306,13 @@ class LuckJinglePrinter:
                 pass
             await process.communicate()
             raise HomeAssistantError(
-                f"Timed out resetting the Bluetooth connection to {self.name}"
+                f"Timed out running a BlueZ command for {self.name}"
             ) from err
 
         if process.returncode:
-            _LOGGER.warning(
-                "bluetoothctl could not disconnect stale link to %s (exit %s): %s",
-                self.name,
-                process.returncode,
-                output.decode(errors="replace").strip(),
+            raise HomeAssistantError(
+                f"BlueZ could not run a command for {self.name}: "
+                f"{output.decode(errors='replace').strip()}"
             )
 
     async def _write(
@@ -227,3 +348,11 @@ class LuckJinglePrinter:
     ) -> None:
         """Queue bytes received on the printer's acknowledgement characteristic."""
         self._ack_queue.put_nowait(bytes(data))
+
+
+def _bluez_device_path(ble_device: BLEDevice) -> str | None:
+    """Return a local BlueZ device path, if this device uses BlueZ."""
+    path = ble_device.details.get("path")
+    if isinstance(path, str) and path.startswith("/org/bluez/hci"):
+        return path
+    return None
